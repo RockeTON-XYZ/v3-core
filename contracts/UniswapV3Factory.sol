@@ -18,7 +18,8 @@ contract UniswapV3Factory is IUniswapV3Factory, UniswapV3PoolDeployer, NoDelegat
     mapping(uint24 => int24) public override feeAmountTickSpacing;
     /// @inheritdoc IUniswapV3Factory
     mapping(address => mapping(address => mapping(uint24 => address))) public override getPool;
-
+    /// @dev Mapping of authorized routers
+    mapping(address => bool) private _authorizedRouters;
     constructor() {
         owner = msg.sender;
         emit OwnerChanged(address(0), msg.sender);
@@ -69,5 +70,18 @@ contract UniswapV3Factory is IUniswapV3Factory, UniswapV3PoolDeployer, NoDelegat
 
         feeAmountTickSpacing[fee] = tickSpacing;
         emit FeeAmountEnabled(fee, tickSpacing);
+    }
+
+    /// @inheritdoc IUniswapV3Factory
+    function isRouterAuthorized(address router) external view override returns (bool) {
+        return _authorizedRouters[router];
+    }
+
+    /// @inheritdoc IUniswapV3Factory
+    function setRouterAuthorization(address router, bool authorized) external override {
+        require(msg.sender == owner, 'Not owner');
+        require(router != address(0), 'Zero address');
+        _authorizedRouters[router] = authorized;
+        emit RouterAuthorizationChanged(router, authorized);
     }
 }

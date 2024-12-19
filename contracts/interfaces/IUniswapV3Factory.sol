@@ -28,10 +28,26 @@ interface IUniswapV3Factory {
     /// @param tickSpacing The minimum number of ticks between initialized ticks for pools created with the given fee
     event FeeAmountEnabled(uint24 indexed fee, int24 indexed tickSpacing);
 
+    /// @notice Emitted when a router's authorization status is changed
+    /// @param router The address of the router
+    /// @param authorized Whether the router is authorized
+    event RouterAuthorizationChanged(address indexed router, bool authorized);
+
     /// @notice Returns the current owner of the factory
     /// @dev Can be changed by the current owner via setOwner
     /// @return The address of the factory owner
     function owner() external view returns (address);
+
+    /// @notice Returns whether a router is authorized to call pool functions
+    /// @param router The address to check
+    /// @return True if the router is authorized, false otherwise
+    function isRouterAuthorized(address router) external view returns (bool);
+
+    /// @notice Authorizes or deauthorizes a router
+    /// @dev Must be called by the current owner
+    /// @param router The router address to authorize/deauthorize
+    /// @param authorized True to authorize, false to deauthorize
+    function setRouterAuthorization(address router, bool authorized) external;
 
     /// @notice Returns the tick spacing for a given fee amount, if enabled, or 0 if not enabled
     /// @dev A fee amount can never be removed, so this value should be hard coded or cached in the calling context

@@ -612,6 +612,9 @@ contract UniswapV3Pool is IUniswapV3Pool, NoDelegateCall {
             'SPL'
         );
 
+        // Add access control
+        require(IUniswapV3Factory(factory).isRouterAuthorized(msg.sender), 'Unauthorized');
+
         slot0.unlocked = false;
 
         SwapCache memory cache =
