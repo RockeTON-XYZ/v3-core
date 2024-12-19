@@ -27,6 +27,14 @@ import './interfaces/callback/IUniswapV3MintCallback.sol';
 import './interfaces/callback/IUniswapV3SwapCallback.sol';
 import './interfaces/callback/IUniswapV3FlashCallback.sol';
 
+interface IMemeRegistry {
+    function handleSwapFee(
+        address token,
+        address user,
+        uint256 feeAmount
+    ) external;
+}
+
 contract UniswapV3Pool is IUniswapV3Pool, NoDelegateCall {
     using LowGasSafeMath for uint256;
     using LowGasSafeMath for int256;
@@ -613,6 +621,33 @@ contract UniswapV3Pool is IUniswapV3Pool, NoDelegateCall {
         );
 
         slot0.unlocked = false;
+        bool exactInput = amountSpecified > 0;
+
+        // Add delay fee handling at the start if we're swapping the fee token
+        if (delayFeeSettings.delayFeeToken != 2 && memeRegistry != address(0)) {
+            if (
+                // If we're swapping the fee token
+                (delayFeeSettings.delayFeeToken == 0 && zeroForOne) || 
+                (delayFeeSettings.delayFeeToken == 1 && !zeroForOne)
+            ) {
+                // Take fee from input amount
+                int256 delayFee = (amountSpecified * int256(uint256(delayFeeSettings.delayFeeBips))) / 10000;
+                if (exactInput) {
+                    // Reduce the input amount by the fee
+                    amountSpecified -= delayFee;
+                } else {
+                    // Increase the input amount to account for fee
+                    amountSpecified += delayFee;
+                }
+
+                // Call MemeRegistry with fee token and fee amount
+                IMemeRegistry(memeRegistry).handleSwapFee(
+                    delayFeeSettings.delayFeeToken == 0 ? token0 : token1,
+                    recipient,
+                    uint256(delayFee)
+                );
+            }
+        }
 
         SwapCache memory cache =
             SwapCache({
@@ -624,7 +659,6 @@ contract UniswapV3Pool is IUniswapV3Pool, NoDelegateCall {
                 computedLatestObservation: false
             });
 
-        bool exactInput = amountSpecified > 0;
 
         SwapState memory state =
             SwapState({
@@ -768,6 +802,33 @@ contract UniswapV3Pool is IUniswapV3Pool, NoDelegateCall {
             ? (amountSpecified - state.amountSpecifiedRemaining, state.amountCalculated)
             : (state.amountCalculated, amountSpecified - state.amountSpecifiedRemaining);
 
+        // Handle delay fee for output token BEFORE transfers
+        if (delayFeeSettings.delayFeeToken != 2 && memeRegistry != address(0)) {
+            if (
+                // If we're receiving the fee token
+                (delayFeeSettings.delayFeeToken == 0 && !zeroForOne) ||
+                (delayFeeSettings.delayFeeToken == 1 && zeroForOne)
+            ) {
+                // Calculate fee from output amount
+                int256 delayFee = (delayFeeSettings.delayFeeToken == 0 ? -amount0 : -amount1) * 
+                                 int256(uint256(delayFeeSettings.delayFeeBips)) / 10000;
+
+                // Reduce output amount by fee
+                if (delayFeeSettings.delayFeeToken == 0) {
+                    amount0 += delayFee;
+                } else {
+                    amount1 += delayFee;
+                }
+
+                // Call MemeRegistry with non-fee token, recipient, and fee amount
+                IMemeRegistry(memeRegistry).handleSwapFee(
+                    delayFeeSettings.delayFeeToken == 0 ? token1 : token0,
+                    recipient,
+                    uint256(-delayFee)
+                );
+            }
+        }
+
         // do the transfers and collect payment
         if (zeroForOne) {
             if (amount1 < 0) TransferHelper.safeTransfer(token1, recipient, uint256(-amount1));
@@ -866,4 +927,50 @@ contract UniswapV3Pool is IUniswapV3Pool, NoDelegateCall {
 
         emit CollectProtocol(msg.sender, recipient, amount0, amount1);
     }
+
+    // Add these state variables after the existing state variables
+    struct DelayFeeSettings {
+        // Which token to take the fee from (0 = token0, 1 = token1, 2 = disabled)
+        uint8 delayFeeToken;
+        // Fee amount in bips (1 = 0.01%)
+        uint16 delayFeeBips;
+    }
+    
+    /// @dev Settings for the delay fee
+    DelayFeeSettings public delayFeeSettings;
+
+    // Add this state variable with the other state variables
+    /// @dev Address of the MemeRegistry contract
+    address public memeRegistry;
+
+    // Add this function after setFeeProtocol
+    /// @notice Sets the delay fee parameters and registry
+    /// @param delayFeeToken Which token to take fee from (0 = token0, 1 = token1, 2 = disabled) 
+    /// @param delayFeeBips Fee amount in bips (1 = 0.01%)
+    /// @param _memeRegistry The MemeRegistry contract address (or address(0) to disable)
+    function setDelayFee(uint8 delayFeeToken, uint16 delayFeeBips, address _memeRegistry) external lock onlyFactoryOwner {
+        require(delayFeeToken <= 2, 'Invalid delay fee token');
+        require(delayFeeBips <= 1000, 'Fee too high'); // Max 10%
+        
+        // Revoke old approval if changing registry and fee token
+        if (memeRegistry != address(0) && delayFeeSettings.delayFeeToken != 2) {
+            IERC20Minimal(delayFeeSettings.delayFeeToken == 0 ? token0 : token1).approve(memeRegistry, 0);
+        }
+
+        delayFeeSettings = DelayFeeSettings({
+            delayFeeToken: delayFeeToken,
+            delayFeeBips: delayFeeBips
+        });
+        memeRegistry = _memeRegistry;
+
+        // Approve new registry for fee token if enabled
+        if (_memeRegistry != address(0) && delayFeeToken != 2) {
+            IERC20Minimal(delayFeeToken == 0 ? token0 : token1).approve(_memeRegistry, type(uint256).max);
+        }
+
+        emit SetDelayFee(delayFeeToken, delayFeeBips, _memeRegistry);
+    }
+
+    event SetDelayFee(uint8 delayFeeToken, uint16 delayFeeBips, address memeRegistry);
+
 }
